@@ -73,6 +73,7 @@ pub struct App {
     rendered_content: Text<'static>,
     scroll_offset: usize,
     content_length: usize,
+    viewport_height: usize,
     watching: bool,
     should_quit: bool,
     mode: AppMode,
@@ -114,6 +115,7 @@ impl App {
             rendered_content,
             scroll_offset: 0,
             content_length,
+            viewport_height: 24,
             watching: watch,
             should_quit: false,
             mode: AppMode::Normal,
@@ -302,23 +304,23 @@ impl App {
     }
 
     fn scroll_half_page_up(&mut self) {
-        let half_page = 10; // Could be made configurable based on terminal height
+        let half_page = (self.viewport_height / 2).max(1);
         self.scroll_offset = self.scroll_offset.saturating_sub(half_page);
     }
 
     fn scroll_half_page_down(&mut self) {
-        let half_page = 10; // Could be made configurable based on terminal height
+        let half_page = (self.viewport_height / 2).max(1);
         let new_offset = self.scroll_offset.saturating_add(half_page);
         self.scroll_offset = new_offset.min(self.content_length.saturating_sub(1));
     }
 
     fn scroll_page_up(&mut self) {
-        let full_page = 20; // Could be made configurable based on terminal height
+        let full_page = self.viewport_height.max(1);
         self.scroll_offset = self.scroll_offset.saturating_sub(full_page);
     }
 
     fn scroll_page_down(&mut self) {
-        let full_page = 20; // Could be made configurable based on terminal height
+        let full_page = self.viewport_height.max(1);
         let new_offset = self.scroll_offset.saturating_add(full_page);
         self.scroll_offset = new_offset.min(self.content_length.saturating_sub(1));
     }
@@ -427,16 +429,20 @@ impl App {
     fn scroll_to_search_result(&mut self, result_index: usize) {
         if let Some(result) = self.search_state.results.get(result_index) {
             let target_line = result.line_index;
-            // Center the result on screen (assuming ~20 lines visible)
-            let screen_center_offset = 10_usize;
-            self.scroll_offset = target_line.saturating_sub(screen_center_offset);
+            let center_offset = (self.viewport_height / 2).max(1);
+            self.scroll_offset = target_line.saturating_sub(center_offset);
 
-            // Ensure we don't scroll past the end
-            let max_scroll = self.content_length.saturating_sub(20);
+            let max_scroll = self
+                .content_length
+                .saturating_sub(self.viewport_height.max(1));
             if self.scroll_offset > max_scroll {
                 self.scroll_offset = max_scroll;
             }
         }
+    }
+
+    pub fn set_viewport_height(&mut self, height: u16) {
+        self.viewport_height = height.saturating_sub(2) as usize;
     }
 
     fn exit_search_mode(&mut self) {
@@ -528,17 +534,19 @@ mod tests {
     #[test]
     fn test_scroll_half_page_up() {
         let mut app = create_test_app();
-        app.scroll_offset = 15;
+        let half_page = (app.viewport_height / 2).max(1);
+        app.scroll_offset = half_page + 3;
         app.scroll_half_page_up();
-        assert_eq!(app.scroll_offset, 5);
+        assert_eq!(app.scroll_offset, 3);
     }
 
     #[test]
     fn test_scroll_half_page_down() {
         let mut app = create_test_app();
-        app.scroll_offset = 5;
+        let half_page = (app.viewport_height / 2).max(1);
+        app.scroll_offset = 3;
         app.scroll_half_page_down();
-        assert_eq!(app.scroll_offset, 15);
+        assert_eq!(app.scroll_offset, 3 + half_page);
     }
 
     #[test]
