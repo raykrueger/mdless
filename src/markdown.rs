@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use std::fs;
@@ -45,7 +45,9 @@ impl MarkdownRenderer {
     }
 
     pub fn render_to_text(&self) -> Text<'static> {
-        let parser = Parser::new(&self.content);
+        let mut options = Options::empty();
+        options.insert(Options::ENABLE_TABLES);
+        let parser = Parser::new_ext(&self.content, options);
         let mut lines = Vec::new();
         let mut current_line = Vec::new();
         let mut in_code_block = false;
@@ -57,7 +59,16 @@ impl MarkdownRenderer {
         let mut in_strong = false;
         let mut _in_list = false;
         let mut _in_list_item = false;
-        let mut last_was_empty_line = true; // Track if the last line was empty
+        let mut last_was_empty_line = true;
+
+        // Table state
+        let mut in_table_head = false;
+        let mut in_table_cell = false;
+        let mut table_alignments: Vec<Alignment> = Vec::new();
+        let mut table_header: Vec<String> = Vec::new();
+        let mut table_rows: Vec<Vec<String>> = Vec::new();
+        let mut table_current_row: Vec<String> = Vec::new();
+        let mut table_current_cell = String::new();
 
         for event in parser {
             match event {
@@ -128,6 +139,25 @@ impl MarkdownRenderer {
                                     .fg(Color::Yellow)
                                     .add_modifier(Modifier::BOLD),
                             ));
+                        }
+                        Tag::Table(alignments) => {
+                            table_alignments = alignments;
+                            table_header.clear();
+                            table_rows.clear();
+                            if !last_was_empty_line {
+                                lines.push(Line::from(""));
+                            }
+                        }
+                        Tag::TableHead => {
+                            in_table_head = true;
+                            table_current_row.clear();
+                        }
+                        Tag::TableRow => {
+                            table_current_row.clear();
+                        }
+                        Tag::TableCell => {
+                            in_table_cell = true;
+                            table_current_cell.clear();
                         }
                         _ => {}
                     }
@@ -231,10 +261,33 @@ impl MarkdownRenderer {
                         }
                         last_was_empty_line = false;
                     }
+                    TagEnd::TableCell => {
+                        in_table_cell = false;
+                        table_current_row.push(table_current_cell.clone());
+                        table_current_cell.clear();
+                    }
+                    TagEnd::TableHead => {
+                        in_table_head = false;
+                        table_header = table_current_row.clone();
+                        table_current_row.clear();
+                    }
+                    TagEnd::TableRow if !in_table_head => {
+                        table_rows.push(table_current_row.clone());
+                        table_current_row.clear();
+                    }
+                    TagEnd::Table => {
+                        let table_lines =
+                            self.render_table(&table_header, &table_rows, &table_alignments);
+                        lines.extend(table_lines);
+                        lines.push(Line::from(""));
+                        last_was_empty_line = true;
+                    }
                     _ => {}
                 },
                 Event::Text(text) => {
-                    if in_code_block {
+                    if in_table_cell {
+                        table_current_cell.push_str(&text);
+                    } else if in_code_block {
                         code_block_content.push_str(&text);
                     } else {
                         let style = self.get_text_style(
@@ -260,12 +313,10 @@ impl MarkdownRenderer {
                     current_line.push(Span::styled(format!(" {} ", code), style));
                     last_was_empty_line = false;
                 }
-                Event::SoftBreak | Event::HardBreak => {
-                    if !current_line.is_empty() {
-                        lines.push(Line::from(current_line.clone()));
-                        current_line.clear();
-                        last_was_empty_line = false;
-                    }
+                Event::SoftBreak | Event::HardBreak if !current_line.is_empty() => {
+                    lines.push(Line::from(current_line.clone()));
+                    current_line.clear();
+                    last_was_empty_line = false;
                 }
                 _ => {}
             }
@@ -335,6 +386,123 @@ impl MarkdownRenderer {
         }
 
         lines
+    }
+
+    fn render_table(
+        &self,
+        header: &[String],
+        rows: &[Vec<String>],
+        alignments: &[Alignment],
+    ) -> Vec<Line<'static>> {
+        let col_count = header.len();
+        if col_count == 0 {
+            return Vec::new();
+        }
+
+        // Compute column widths: max content width across header and all body rows
+        let col_widths: Vec<usize> = (0..col_count)
+            .map(|i| {
+                let header_w = header.get(i).map(|s| s.chars().count()).unwrap_or(0);
+                let body_w = rows
+                    .iter()
+                    .map(|row| row.get(i).map(|s| s.chars().count()).unwrap_or(0))
+                    .max()
+                    .unwrap_or(0);
+                header_w.max(body_w).max(1)
+            })
+            .collect();
+
+        let border_style = Style::default().fg(Color::DarkGray);
+        let header_style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+
+        let top_border = Self::table_border_line(&col_widths, '┌', '┬', '┐', '─', border_style);
+        let head_sep = Self::table_border_line(&col_widths, '├', '┼', '┤', '─', border_style);
+        let bot_border = Self::table_border_line(&col_widths, '└', '┴', '┘', '─', border_style);
+
+        let mut lines = vec![top_border];
+
+        // Header row
+        lines.push(Self::table_data_line(
+            header,
+            &col_widths,
+            alignments,
+            header_style,
+            border_style,
+        ));
+        lines.push(head_sep);
+
+        // Body rows
+        for row in rows {
+            lines.push(Self::table_data_line(
+                row,
+                &col_widths,
+                alignments,
+                Style::default(),
+                border_style,
+            ));
+        }
+
+        lines.push(bot_border);
+        lines
+    }
+
+    fn table_border_line(
+        col_widths: &[usize],
+        left: char,
+        mid: char,
+        right: char,
+        fill: char,
+        style: Style,
+    ) -> Line<'static> {
+        let mut s = String::new();
+        s.push(left);
+        for (i, &w) in col_widths.iter().enumerate() {
+            for _ in 0..w + 2 {
+                s.push(fill);
+            }
+            if i < col_widths.len() - 1 {
+                s.push(mid);
+            }
+        }
+        s.push(right);
+        Line::from(Span::styled(s, style))
+    }
+
+    fn table_data_line(
+        cells: &[String],
+        col_widths: &[usize],
+        alignments: &[Alignment],
+        cell_style: Style,
+        border_style: Style,
+    ) -> Line<'static> {
+        let mut spans = Vec::new();
+        spans.push(Span::styled("│".to_string(), border_style));
+        for (i, &w) in col_widths.iter().enumerate() {
+            let content = cells.get(i).map(|s| s.as_str()).unwrap_or("");
+            let content_len = content.chars().count();
+            let padding = w.saturating_sub(content_len);
+            let alignment = alignments.get(i).unwrap_or(&Alignment::None);
+
+            let (left_pad, right_pad) = match alignment {
+                Alignment::Right => (padding, 0),
+                Alignment::Center => (padding / 2, padding - padding / 2),
+                _ => (0, padding),
+            };
+
+            spans.push(Span::styled(" ".to_string(), border_style));
+            if left_pad > 0 {
+                spans.push(Span::styled(" ".repeat(left_pad), Style::default()));
+            }
+            spans.push(Span::styled(content.to_string(), cell_style));
+            if right_pad > 0 {
+                spans.push(Span::styled(" ".repeat(right_pad), Style::default()));
+            }
+            spans.push(Span::styled(" ".to_string(), border_style));
+            spans.push(Span::styled("│".to_string(), border_style));
+        }
+        Line::from(spans)
     }
 
     fn syntect_style_to_ratatui(&self, syntect_style: SyntectStyle) -> Style {
@@ -605,6 +773,72 @@ mod tests {
             assert_eq!(
                 display_width, 79,
                 "Code content line should be exactly 79 display characters wide"
+            );
+        }
+    }
+
+    #[test]
+    fn test_table_renders() {
+        let mut renderer = MarkdownRenderer::new();
+        renderer.content =
+            "| Key | Action |\n| --- | --- |\n| `q` | Quit |\n| `j` | Down |".to_string();
+
+        let text = renderer.render_to_text();
+        let lines_text: Vec<String> = text
+            .lines
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+
+        // Should have top border, header, separator, 2 body rows, bottom border
+        assert!(
+            lines_text.iter().any(|l| l.starts_with('┌')),
+            "missing top border"
+        );
+        assert!(
+            lines_text.iter().any(|l| l.starts_with('├')),
+            "missing header separator"
+        );
+        assert!(
+            lines_text.iter().any(|l| l.starts_with('└')),
+            "missing bottom border"
+        );
+        assert!(
+            lines_text.iter().any(|l| l.contains("Key")),
+            "missing header cell"
+        );
+        assert!(
+            lines_text.iter().any(|l| l.contains("Quit")),
+            "missing body cell"
+        );
+    }
+
+    #[test]
+    fn test_table_column_widths() {
+        let mut renderer = MarkdownRenderer::new();
+        // Second column has a longer body cell than header
+        renderer.content = "| A | B |\n| --- | --- |\n| x | very long cell |".to_string();
+
+        let text = renderer.render_to_text();
+        let lines_text: Vec<String> = text
+            .lines
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+
+        // All border lines should be the same width
+        let border_lines: Vec<&String> = lines_text
+            .iter()
+            .filter(|l| l.starts_with('┌') || l.starts_with('├') || l.starts_with('└'))
+            .collect();
+
+        assert!(!border_lines.is_empty());
+        let width = border_lines[0].chars().count();
+        for line in &border_lines {
+            assert_eq!(
+                line.chars().count(),
+                width,
+                "border lines should all be equal width"
             );
         }
     }
