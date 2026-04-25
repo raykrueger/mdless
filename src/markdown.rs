@@ -334,6 +334,10 @@ impl MarkdownRenderer {
         let theme = &self.theme_set.themes["base16-ocean.dark"];
         let mut highlighter = HighlightLines::new(syntax, theme);
 
+        // "│ " prefix (2) + content + padding + "│" suffix (1) = BOX_WIDTH
+        const BOX_WIDTH: usize = 79;
+        const INNER_WIDTH: usize = BOX_WIDTH - 3; // 76
+
         for line in LinesWithEndings::from(code) {
             let highlighted = highlighter
                 .highlight_line(line, &self.syntax_set)
@@ -343,23 +347,48 @@ impl MarkdownRenderer {
 
             for (style, text) in highlighted {
                 let ratatui_style = self.syntect_style_to_ratatui(style);
-                // Strip newlines from the text since they don't contribute to display width
                 let display_text = text.trim_end_matches('\n');
                 if !display_text.is_empty() {
                     spans.push(Span::styled(display_text.to_string(), ratatui_style));
                 }
             }
 
-            // Pad the line to fit within the border
-            // Target: "│ " + content + padding + "│" = 79 display characters
             let content_length: usize = spans
                 .iter()
                 .skip(1)
                 .map(|s| s.content.chars().count())
                 .sum();
-            let padding_needed = 79_usize.saturating_sub(2 + content_length + 1);
-            spans.push(Span::styled(" ".repeat(padding_needed), Style::default()));
 
+            // Truncate lines that exceed the box inner width
+            if content_length > INNER_WIDTH {
+                let max_chars = INNER_WIDTH - 1; // reserve 1 for …
+                let mut new_spans = vec![spans[0].clone()];
+                let mut chars_left = max_chars;
+                for span in spans.iter().skip(1) {
+                    if chars_left == 0 {
+                        break;
+                    }
+                    let span_len = span.content.chars().count();
+                    if span_len <= chars_left {
+                        new_spans.push(span.clone());
+                        chars_left -= span_len;
+                    } else {
+                        let partial: String = span.content.chars().take(chars_left).collect();
+                        new_spans.push(Span::styled(partial, span.style));
+                        chars_left = 0;
+                    }
+                }
+                new_spans.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
+                spans = new_spans;
+            }
+
+            let content_length: usize = spans
+                .iter()
+                .skip(1)
+                .map(|s| s.content.chars().count())
+                .sum();
+            let padding_needed = BOX_WIDTH.saturating_sub(2 + content_length + 1);
+            spans.push(Span::styled(" ".repeat(padding_needed), Style::default()));
             spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
             lines.push(Line::from(spans));
         }
@@ -827,6 +856,30 @@ mod tests {
                 line.chars().count(),
                 width,
                 "border lines should all be equal width"
+            );
+        }
+    }
+
+    #[test]
+    fn test_long_code_line_truncated() {
+        let mut renderer = MarkdownRenderer::new();
+        // 88-char line — longer than inner box width of 76
+        renderer.content =
+            "```bash\nwget https://github.com/raykrueger/mdless/releases/latest/download/mdless-macos-aarch64\n```"
+                .to_string();
+
+        let text = renderer.render_to_text();
+
+        // Every content line must be exactly 79 display chars wide
+        for line in text
+            .lines
+            .iter()
+            .filter(|l| l.spans.first().map(|s| s.content == "│ ").unwrap_or(false))
+        {
+            let width: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+            assert_eq!(
+                width, 79,
+                "code line must be exactly 79 chars wide, got {width}"
             );
         }
     }
