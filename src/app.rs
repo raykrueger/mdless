@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crossterm::{
+    cursor::Show,
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -28,6 +29,20 @@ use std::{io, path::PathBuf, sync::mpsc, time::Duration};
 use crate::error::{MdViewError, Result};
 use crate::markdown::MarkdownRenderer;
 use crate::ui;
+
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            Show
+        );
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppMode {
@@ -102,8 +117,9 @@ impl App {
     }
 
     pub fn run(&mut self) -> Result<()> {
-        // Setup terminal
         enable_raw_mode().map_err(|e| MdViewError::Terminal(e.to_string()))?;
+        let _guard = TerminalGuard;
+
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
             .map_err(|e| MdViewError::Terminal(e.to_string()))?;
@@ -111,21 +127,7 @@ impl App {
         let mut terminal =
             Terminal::new(backend).map_err(|e| MdViewError::Terminal(e.to_string()))?;
 
-        let result = self.run_app(&mut terminal);
-
-        // Restore terminal
-        disable_raw_mode().map_err(|e| MdViewError::Terminal(e.to_string()))?;
-        execute!(
-            terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        )
-        .map_err(|e| MdViewError::Terminal(e.to_string()))?;
-        terminal
-            .show_cursor()
-            .map_err(|e| MdViewError::Terminal(e.to_string()))?;
-
-        result
+        self.run_app(&mut terminal)
     }
 
     fn run_app<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
