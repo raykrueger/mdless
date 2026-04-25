@@ -58,9 +58,10 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
 fn draw_content(frame: &mut Frame, area: Rect, app: &mut App) {
     let content = app.get_rendered_content().clone();
 
+    let scroll_offset = app.get_scroll_offset();
     let paragraph = Paragraph::new(content)
         .block(Block::default().borders(Borders::ALL))
-        .scroll((app.get_scroll_offset(), 0))
+        .scroll((u16::try_from(scroll_offset).unwrap_or(u16::MAX), 0))
         .wrap(ratatui::widgets::Wrap { trim: true });
 
     frame.render_widget(paragraph, area);
@@ -72,8 +73,8 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &mut App) {
         .end_symbol(Some("↓"));
 
     let mut scrollbar_state = ScrollbarState::default()
-        .content_length(app.get_content_length() as usize)
-        .position(app.get_scroll_offset() as usize);
+        .content_length(app.get_content_length())
+        .position(scroll_offset);
 
     frame.render_stateful_widget(
         scrollbar,
