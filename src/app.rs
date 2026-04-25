@@ -56,8 +56,8 @@ pub struct App {
     file_path: PathBuf,
     renderer: MarkdownRenderer,
     rendered_content: Text<'static>,
-    scroll_offset: u16,
-    content_length: u16,
+    scroll_offset: usize,
+    content_length: usize,
     watching: bool,
     should_quit: bool,
     mode: AppMode,
@@ -72,7 +72,7 @@ impl App {
         let mut renderer = MarkdownRenderer::new();
         renderer.load_file(&file_path)?;
         let rendered_content = renderer.render_to_text();
-        let content_length = rendered_content.lines.len() as u16;
+        let content_length = rendered_content.lines.len();
 
         let (file_watcher, file_change_rx) = if watch {
             let (tx, rx) = mpsc::channel();
@@ -325,7 +325,7 @@ impl App {
     fn reload_file(&mut self) -> Result<()> {
         self.renderer.load_file(&self.file_path)?;
         self.rendered_content = self.renderer.render_to_text();
-        self.content_length = self.rendered_content.lines.len() as u16;
+        self.content_length = self.rendered_content.lines.len();
 
         // Adjust scroll offset if content is shorter
         if self.scroll_offset >= self.content_length {
@@ -413,9 +413,9 @@ impl App {
 
     fn scroll_to_search_result(&mut self, result_index: usize) {
         if let Some(result) = self.search_state.results.get(result_index) {
-            let target_line = result.line_index as u16;
+            let target_line = result.line_index;
             // Center the result on screen (assuming ~20 lines visible)
-            let screen_center_offset = 10;
+            let screen_center_offset = 10_usize;
             self.scroll_offset = target_line.saturating_sub(screen_center_offset);
 
             // Ensure we don't scroll past the end
@@ -452,11 +452,11 @@ impl App {
         &self.rendered_content
     }
 
-    pub fn get_scroll_offset(&self) -> u16 {
+    pub fn get_scroll_offset(&self) -> usize {
         self.scroll_offset
     }
 
-    pub fn get_content_length(&self) -> u16 {
+    pub fn get_content_length(&self) -> usize {
         self.content_length
     }
 
