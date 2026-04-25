@@ -30,6 +30,286 @@ pub struct MarkdownRenderer {
     theme_set: ThemeSet,
 }
 
+/// Stateful builder that consumes pulldown-cmark events and produces ratatui `Text`.
+/// Holds a reference to `MarkdownRenderer` to access syntax-highlighting helpers.
+struct MarkdownLineBuilder<'a> {
+    renderer: &'a MarkdownRenderer,
+    lines: Vec<Line<'static>>,
+    current_line: Vec<Span<'static>>,
+    in_code_block: bool,
+    code_block_language: String,
+    code_block_content: String,
+    in_heading: bool,
+    heading_level: u8,
+    in_emphasis: bool,
+    in_strong: bool,
+    last_was_empty_line: bool,
+    // Table state
+    in_table_head: bool,
+    in_table_cell: bool,
+    table_alignments: Vec<Alignment>,
+    table_header: Vec<String>,
+    table_rows: Vec<Vec<String>>,
+    table_current_row: Vec<String>,
+    table_current_cell: String,
+}
+
+impl<'a> MarkdownLineBuilder<'a> {
+    fn new(renderer: &'a MarkdownRenderer) -> Self {
+        Self {
+            renderer,
+            lines: Vec::new(),
+            current_line: Vec::new(),
+            in_code_block: false,
+            code_block_language: String::new(),
+            code_block_content: String::new(),
+            in_heading: false,
+            heading_level: 0,
+            in_emphasis: false,
+            in_strong: false,
+            last_was_empty_line: true,
+            in_table_head: false,
+            in_table_cell: false,
+            table_alignments: Vec::new(),
+            table_header: Vec::new(),
+            table_rows: Vec::new(),
+            table_current_row: Vec::new(),
+            table_current_cell: String::new(),
+        }
+    }
+
+    fn handle_event(&mut self, event: Event) {
+        match event {
+            Event::Start(tag) => self.handle_start_tag(tag),
+            Event::End(tag_end) => self.handle_end_tag(tag_end),
+            Event::Text(text) => self.handle_text(&text),
+            Event::Code(code) => self.handle_code(&code),
+            Event::SoftBreak | Event::HardBreak if !self.current_line.is_empty() => {
+                self.handle_break();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_start_tag(&mut self, tag: Tag) {
+        match tag {
+            Tag::Heading { level, .. } => {
+                self.flush_current_line();
+                if !self.last_was_empty_line && !self.lines.is_empty() {
+                    self.lines.push(Line::from(""));
+                }
+                self.in_heading = true;
+                self.heading_level = level as u8;
+            }
+            Tag::CodeBlock(lang) => {
+                self.in_code_block = true;
+                self.code_block_language = match lang {
+                    pulldown_cmark::CodeBlockKind::Indented => String::new(),
+                    pulldown_cmark::CodeBlockKind::Fenced(lang_str) => lang_str.to_string(),
+                };
+                self.code_block_content.clear();
+                self.flush_current_line();
+                if !self.last_was_empty_line {
+                    self.lines.push(Line::from(""));
+                }
+            }
+            Tag::Emphasis => self.in_emphasis = true,
+            Tag::Strong => self.in_strong = true,
+            Tag::Paragraph => {}
+            Tag::List(_) if !self.current_line.is_empty() => {
+                self.flush_current_line();
+            }
+            Tag::Item => {
+                self.flush_current_line();
+                self.current_line.push(Span::styled(
+                    "• ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            Tag::Table(alignments) => {
+                self.table_alignments = alignments;
+                self.table_header.clear();
+                self.table_rows.clear();
+                if !self.last_was_empty_line {
+                    self.lines.push(Line::from(""));
+                }
+            }
+            Tag::TableHead => {
+                self.in_table_head = true;
+                self.table_current_row.clear();
+            }
+            Tag::TableRow => self.table_current_row.clear(),
+            Tag::TableCell => {
+                self.in_table_cell = true;
+                self.table_current_cell.clear();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_end_tag(&mut self, tag_end: TagEnd) {
+        match tag_end {
+            TagEnd::Heading(_) => {
+                self.in_heading = false;
+                self.flush_current_line();
+                self.lines.push(Line::from(""));
+                self.last_was_empty_line = true;
+            }
+            TagEnd::CodeBlock => {
+                self.in_code_block = false;
+                self.render_code_block();
+                self.lines.push(Line::from(""));
+                self.last_was_empty_line = true;
+                self.code_block_content.clear();
+                self.code_block_language.clear();
+            }
+            TagEnd::Emphasis => self.in_emphasis = false,
+            TagEnd::Strong => self.in_strong = false,
+            TagEnd::Paragraph => {
+                self.flush_current_line();
+                self.lines.push(Line::from(""));
+                self.last_was_empty_line = true;
+            }
+            TagEnd::List(_) => {
+                self.flush_current_line();
+                self.lines.push(Line::from(""));
+                self.last_was_empty_line = true;
+            }
+            TagEnd::Item => {
+                self.flush_current_line();
+                self.last_was_empty_line = false;
+            }
+            TagEnd::TableCell => {
+                self.in_table_cell = false;
+                self.table_current_row.push(self.table_current_cell.clone());
+                self.table_current_cell.clear();
+            }
+            TagEnd::TableHead => {
+                self.in_table_head = false;
+                self.table_header = self.table_current_row.clone();
+                self.table_current_row.clear();
+            }
+            TagEnd::TableRow if !self.in_table_head => {
+                self.table_rows.push(self.table_current_row.clone());
+                self.table_current_row.clear();
+            }
+            TagEnd::Table => {
+                let table_lines = self.renderer.render_table(
+                    &self.table_header,
+                    &self.table_rows,
+                    &self.table_alignments,
+                );
+                self.lines.extend(table_lines);
+                self.lines.push(Line::from(""));
+                self.last_was_empty_line = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_text(&mut self, text: &str) {
+        if self.in_table_cell {
+            self.table_current_cell.push_str(text);
+        } else if self.in_code_block {
+            self.code_block_content.push_str(text);
+        } else {
+            let style = self.renderer.get_text_style(
+                self.in_heading,
+                self.heading_level,
+                self.in_code_block,
+                self.in_emphasis,
+                self.in_strong,
+            );
+            self.current_line
+                .push(Span::styled(text.to_string(), style));
+            if !text.trim().is_empty() {
+                self.last_was_empty_line = false;
+            }
+        }
+    }
+
+    fn handle_code(&mut self, code: &str) {
+        let style = Style::default()
+            .fg(Color::Yellow)
+            .bg(Color::Rgb(40, 40, 40))
+            .add_modifier(Modifier::BOLD);
+        self.current_line
+            .push(Span::styled(format!(" {} ", code), style));
+        self.last_was_empty_line = false;
+    }
+
+    fn handle_break(&mut self) {
+        self.flush_current_line();
+        self.last_was_empty_line = false;
+    }
+
+    /// Flush the current_line buffer into lines, clearing it.
+    fn flush_current_line(&mut self) {
+        if !self.current_line.is_empty() {
+            self.lines.push(Line::from(self.current_line.clone()));
+            self.current_line.clear();
+        }
+    }
+
+    /// Render the collected code block with borders and syntax highlighting.
+    fn render_code_block(&mut self) {
+        let highlighted_lines = self
+            .renderer
+            .highlight_code_block(&self.code_block_content, &self.code_block_language);
+
+        // Top border
+        self.lines.push(Line::from(vec![Span::styled(
+            "┌─────────────────────────────────────────────────────────────────────────────┐",
+            Style::default().fg(Color::DarkGray),
+        )]));
+
+        // Language label if present
+        if !self.code_block_language.is_empty() {
+            let language_display_width = self.code_block_language.chars().count();
+            let padding_needed = 79_usize.saturating_sub(2 + language_display_width + 1);
+
+            self.lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    self.code_block_language.clone(),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" ".repeat(padding_needed), Style::default()),
+                Span::styled("│", Style::default().fg(Color::DarkGray)),
+            ]));
+            self.lines.push(Line::from(vec![Span::styled(
+                "├─────────────────────────────────────────────────────────────────────────────┤",
+                Style::default().fg(Color::DarkGray),
+            )]));
+        }
+
+        // Highlighted code lines
+        self.lines.extend(highlighted_lines);
+
+        // Bottom border
+        self.lines.push(Line::from(vec![Span::styled(
+            "└─────────────────────────────────────────────────────────────────────────────┘",
+            Style::default().fg(Color::DarkGray),
+        )]));
+    }
+
+    /// Finalize: flush any remaining content and return the rendered Text.
+    fn finish(self) -> Text<'static> {
+        let mut lines = self.lines;
+        // Note: current_line is consumed by self-drop, no need to flush
+        // since handle_event covers all events that leave content in current_line.
+        // But to be safe, flush trailing content.
+        if !self.current_line.is_empty() {
+            lines.push(Line::from(self.current_line));
+        }
+        Text::from(lines)
+    }
+}
+
 impl MarkdownRenderer {
     pub fn new() -> Self {
         Self {
@@ -48,273 +328,12 @@ impl MarkdownRenderer {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_TABLES);
         let parser = Parser::new_ext(&self.content, options);
-        let mut lines = Vec::new();
-        let mut current_line = Vec::new();
-        let mut in_code_block = false;
-        let mut code_block_language = String::new();
-        let mut code_block_content = String::new();
-        let mut in_heading = false;
-        let mut heading_level = 0;
-        let mut in_emphasis = false;
-        let mut in_strong = false;
-        let mut last_was_empty_line = true;
 
-        // Table state
-        let mut in_table_head = false;
-        let mut in_table_cell = false;
-        let mut table_alignments: Vec<Alignment> = Vec::new();
-        let mut table_header: Vec<String> = Vec::new();
-        let mut table_rows: Vec<Vec<String>> = Vec::new();
-        let mut table_current_row: Vec<String> = Vec::new();
-        let mut table_current_cell = String::new();
-
+        let mut builder = MarkdownLineBuilder::new(self);
         for event in parser {
-            match event {
-                Event::Start(tag) => {
-                    match tag {
-                        Tag::Heading { level, .. } => {
-                            // If we have content in current_line or the last line wasn't empty,
-                            // we need to add spacing before the heading
-                            if !current_line.is_empty() {
-                                lines.push(Line::from(current_line.clone()));
-                                current_line.clear();
-                            }
-
-                            // Add blank line before heading if the last line wasn't already empty
-                            if !last_was_empty_line && !lines.is_empty() {
-                                lines.push(Line::from(""));
-                            }
-
-                            in_heading = true;
-                            heading_level = level as u8;
-                        }
-                        Tag::CodeBlock(lang) => {
-                            in_code_block = true;
-                            code_block_language = match lang {
-                                pulldown_cmark::CodeBlockKind::Indented => String::new(),
-                                pulldown_cmark::CodeBlockKind::Fenced(lang_str) => {
-                                    lang_str.to_string()
-                                }
-                            };
-                            code_block_content.clear();
-                            if !current_line.is_empty() {
-                                lines.push(Line::from(current_line.clone()));
-                                current_line.clear();
-                            }
-                            // Add a blank line before code block for spacing
-                            if !last_was_empty_line {
-                                lines.push(Line::from(""));
-                            }
-                        }
-                        Tag::Emphasis => {
-                            in_emphasis = true;
-                        }
-                        Tag::Strong => {
-                            in_strong = true;
-                        }
-                        Tag::Paragraph => {
-                            // Start new paragraph
-                        }
-                        Tag::List(_) if !current_line.is_empty() => {
-                            lines.push(Line::from(current_line.clone()));
-                            current_line.clear();
-                        }
-                        Tag::Item => {
-                            if !current_line.is_empty() {
-                                lines.push(Line::from(current_line.clone()));
-                                current_line.clear();
-                            }
-                            // Add bullet point
-                            current_line.push(Span::styled(
-                                "• ",
-                                Style::default()
-                                    .fg(Color::Yellow)
-                                    .add_modifier(Modifier::BOLD),
-                            ));
-                        }
-                        Tag::Table(alignments) => {
-                            table_alignments = alignments;
-                            table_header.clear();
-                            table_rows.clear();
-                            if !last_was_empty_line {
-                                lines.push(Line::from(""));
-                            }
-                        }
-                        Tag::TableHead => {
-                            in_table_head = true;
-                            table_current_row.clear();
-                        }
-                        Tag::TableRow => {
-                            table_current_row.clear();
-                        }
-                        Tag::TableCell => {
-                            in_table_cell = true;
-                            table_current_cell.clear();
-                        }
-                        _ => {}
-                    }
-                }
-                Event::End(tag_end) => match tag_end {
-                    TagEnd::Heading(_) => {
-                        in_heading = false;
-                        if !current_line.is_empty() {
-                            lines.push(Line::from(current_line.clone()));
-                            current_line.clear();
-                        }
-                        lines.push(Line::from(""));
-                        last_was_empty_line = true;
-                    }
-                    TagEnd::CodeBlock => {
-                        in_code_block = false;
-
-                        // Render the collected code block with syntax highlighting
-                        let highlighted_lines =
-                            self.highlight_code_block(&code_block_content, &code_block_language);
-
-                        // Add top border (79 characters wide)
-                        lines.push(Line::from(vec![Span::styled(
-                            "┌─────────────────────────────────────────────────────────────────────────────┐",
-                            Style::default().fg(Color::DarkGray)
-                        )]));
-
-                        // Add language label if present
-                        if !code_block_language.is_empty() {
-                            // Calculate proper padding for language label
-                            // The border is 79 display characters wide
-                            // Content structure: "│ " + language + padding + "│"
-                            // We want: 2 (for "│ ") + language_len + padding + 1 (for "│") = 79 chars
-                            let language_display_width = code_block_language.chars().count();
-                            let padding_needed =
-                                79_usize.saturating_sub(2 + language_display_width + 1);
-
-                            lines.push(Line::from(vec![
-                                Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                                Span::styled(
-                                    code_block_language.clone(),
-                                    Style::default()
-                                        .fg(Color::Cyan)
-                                        .add_modifier(Modifier::BOLD),
-                                ),
-                                Span::styled(" ".repeat(padding_needed), Style::default()),
-                                Span::styled("│", Style::default().fg(Color::DarkGray)),
-                            ]));
-                            lines.push(Line::from(vec![Span::styled(
-                                "├─────────────────────────────────────────────────────────────────────────────┤",
-                                Style::default().fg(Color::DarkGray)
-                            )]));
-                        }
-
-                        // Add highlighted code lines
-                        for highlighted_line in highlighted_lines {
-                            lines.push(highlighted_line);
-                        }
-
-                        // Add bottom border
-                        lines.push(Line::from(vec![Span::styled(
-                            "└─────────────────────────────────────────────────────────────────────────────┘",
-                            Style::default().fg(Color::DarkGray)
-                        )]));
-
-                        lines.push(Line::from(""));
-                        last_was_empty_line = true;
-                        code_block_content.clear();
-                        code_block_language.clear();
-                    }
-                    TagEnd::Emphasis => {
-                        in_emphasis = false;
-                    }
-                    TagEnd::Strong => {
-                        in_strong = false;
-                    }
-                    TagEnd::Paragraph => {
-                        if !current_line.is_empty() {
-                            lines.push(Line::from(current_line.clone()));
-                            current_line.clear();
-                        }
-                        lines.push(Line::from(""));
-                        last_was_empty_line = true;
-                    }
-                    TagEnd::List(_) => {
-                        if !current_line.is_empty() {
-                            lines.push(Line::from(current_line.clone()));
-                            current_line.clear();
-                        }
-                        lines.push(Line::from(""));
-                        last_was_empty_line = true;
-                    }
-                    TagEnd::Item => {
-                        if !current_line.is_empty() {
-                            lines.push(Line::from(current_line.clone()));
-                            current_line.clear();
-                        }
-                        last_was_empty_line = false;
-                    }
-                    TagEnd::TableCell => {
-                        in_table_cell = false;
-                        table_current_row.push(table_current_cell.clone());
-                        table_current_cell.clear();
-                    }
-                    TagEnd::TableHead => {
-                        in_table_head = false;
-                        table_header = table_current_row.clone();
-                        table_current_row.clear();
-                    }
-                    TagEnd::TableRow if !in_table_head => {
-                        table_rows.push(table_current_row.clone());
-                        table_current_row.clear();
-                    }
-                    TagEnd::Table => {
-                        let table_lines =
-                            self.render_table(&table_header, &table_rows, &table_alignments);
-                        lines.extend(table_lines);
-                        lines.push(Line::from(""));
-                        last_was_empty_line = true;
-                    }
-                    _ => {}
-                },
-                Event::Text(text) => {
-                    if in_table_cell {
-                        table_current_cell.push_str(&text);
-                    } else if in_code_block {
-                        code_block_content.push_str(&text);
-                    } else {
-                        let style = self.get_text_style(
-                            in_heading,
-                            heading_level,
-                            in_code_block,
-                            in_emphasis,
-                            in_strong,
-                        );
-
-                        current_line.push(Span::styled(text.to_string(), style));
-                        // Text content means we're not on an empty line
-                        if !text.trim().is_empty() {
-                            last_was_empty_line = false;
-                        }
-                    }
-                }
-                Event::Code(code) => {
-                    let style = Style::default()
-                        .fg(Color::Yellow)
-                        .bg(Color::Rgb(40, 40, 40))
-                        .add_modifier(Modifier::BOLD);
-                    current_line.push(Span::styled(format!(" {} ", code), style));
-                    last_was_empty_line = false;
-                }
-                Event::SoftBreak | Event::HardBreak if !current_line.is_empty() => {
-                    lines.push(Line::from(current_line.clone()));
-                    current_line.clear();
-                    last_was_empty_line = false;
-                }
-                _ => {}
-            }
+            builder.handle_event(event);
         }
-
-        if !current_line.is_empty() {
-            lines.push(Line::from(current_line));
-        }
-
-        Text::from(lines)
+        builder.finish()
     }
 
     fn highlight_code_block(&self, code: &str, language: &str) -> Vec<Line<'static>> {

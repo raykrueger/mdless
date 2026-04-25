@@ -22,7 +22,8 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::{
     Terminal,
     backend::{Backend, CrosstermBackend},
-    text::Text,
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
 };
 use std::{io, path::PathBuf, sync::mpsc, time::Duration};
 
@@ -72,6 +73,7 @@ pub struct App {
     file_name: String,
     renderer: MarkdownRenderer,
     rendered_content: Text<'static>,
+    highlighted_content: Text<'static>,
     scroll_offset: usize,
     content_length: usize,
     viewport_height: usize,
@@ -120,6 +122,7 @@ impl App {
             file_name,
             renderer,
             rendered_content,
+            highlighted_content: Text::from(vec![Line::from("")]),
             scroll_offset: 0,
             content_length,
             viewport_height: 24,
@@ -355,6 +358,9 @@ impl App {
         // Clear search results since content changed
         self.clear_search();
 
+        // Reset highlights
+        self.highlighted_content = Text::from(vec![Line::from("")]);
+
         Ok(())
     }
 
@@ -399,9 +405,11 @@ impl App {
         self.search_state.results = results;
         if !self.search_state.results.is_empty() {
             self.search_state.current_result_index = Some(0);
+            self.highlight_search_results();
             self.scroll_to_search_result(0);
         } else {
             self.search_state.current_result_index = None;
+            self.highlighted_content = Text::from(vec![Line::from("")]);
         }
     }
 
@@ -413,6 +421,7 @@ impl App {
         let current_index = self.search_state.current_result_index.unwrap_or(0);
         let next_index = (current_index + 1) % self.search_state.results.len();
         self.search_state.current_result_index = Some(next_index);
+        self.highlight_search_results();
         self.scroll_to_search_result(next_index);
     }
 
@@ -428,6 +437,7 @@ impl App {
             current_index - 1
         };
         self.search_state.current_result_index = Some(prev_index);
+        self.highlight_search_results();
         self.scroll_to_search_result(prev_index);
     }
 
@@ -446,6 +456,77 @@ impl App {
         }
     }
 
+    fn highlight_search_results(&mut self) {
+        let query = self.search_state.query.to_lowercase();
+        let mut highlighted_lines: Vec<Line<'static>> = self
+            .rendered_content
+            .lines
+            .iter()
+            .map(|line| {
+                let mut final_spans = Vec::new();
+                for span in line.spans.iter() {
+                    let text = span.content.as_ref();
+                    let text_lower = text.to_lowercase();
+                    let mut start = 0;
+
+                    while let Some(pos) = text_lower[start..].find(&query) {
+                        let actual_pos = start + pos;
+                        let end = actual_pos + query.len();
+
+                        if actual_pos > start {
+                            final_spans.push(Span::styled(
+                                text[start..actual_pos].to_string(),
+                                span.style,
+                            ));
+                        }
+
+                        final_spans.push(Span::styled(
+                            text[actual_pos..end].to_string(),
+                            Style::default()
+                                .bg(Color::DarkGray)
+                                .fg(Color::White)
+                                .add_modifier(Modifier::BOLD),
+                        ));
+
+                        start = end;
+                    }
+
+                    if start < text.len() {
+                        final_spans.push(Span::styled(text[start..].to_string(), span.style));
+                    }
+
+                    if final_spans.is_empty() {
+                        final_spans.push(span.clone());
+                    }
+                }
+
+                Line::from(final_spans)
+            })
+            .collect();
+
+        // Mark the current search result line
+        if let Some(current_index) = self.search_state.current_result_index
+            && let Some(result) = self.search_state.results.get(current_index)
+        {
+            let line_idx = result.line_index;
+            if line_idx < highlighted_lines.len() {
+                let line = highlighted_lines[line_idx].clone();
+                let mut spans = Vec::new();
+                // Add a marker prefix
+                spans.push(Span::styled(
+                    "▸ ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                spans.extend(line.spans.iter().cloned());
+                highlighted_lines[line_idx] = Line::from(spans);
+            }
+        }
+
+        self.highlighted_content = Text::from(highlighted_lines);
+    }
+
     pub fn set_viewport_height(&mut self, height: u16) {
         self.viewport_height = height.saturating_sub(2) as usize;
     }
@@ -462,6 +543,7 @@ impl App {
 
     fn clear_search(&mut self) {
         self.search_state = SearchState::default();
+        self.highlighted_content = Text::from(vec![Line::from("")]);
     }
 
     pub fn get_file_name(&self) -> &str {
@@ -470,6 +552,10 @@ impl App {
 
     pub fn get_rendered_content(&self) -> &Text<'static> {
         &self.rendered_content
+    }
+
+    pub fn get_highlighted_content(&self) -> &Text<'static> {
+        &self.highlighted_content
     }
 
     pub fn get_scroll_offset(&self) -> usize {
