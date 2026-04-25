@@ -77,9 +77,10 @@ pub struct App {
     should_quit: bool,
     mode: AppMode,
     search_state: SearchState,
+    status_message: Option<String>,
     #[allow(dead_code)]
     file_watcher: Option<RecommendedWatcher>,
-    file_change_rx: Option<mpsc::Receiver<()>>,
+    file_change_rx: Option<mpsc::Receiver<Option<String>>>,
 }
 
 impl App {
@@ -91,9 +92,15 @@ impl App {
 
         let (file_watcher, file_change_rx) = if watch {
             let (tx, rx) = mpsc::channel();
-            let mut watcher = notify::recommended_watcher(move |_| {
-                let _ = tx.send(());
-            })?;
+            let mut watcher =
+                notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+                    Ok(_) => {
+                        let _ = tx.send(None);
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Some(e.to_string()));
+                    }
+                })?;
 
             watcher.watch(&file_path, RecursiveMode::NonRecursive)?;
             (Some(watcher), Some(rx))
@@ -111,6 +118,7 @@ impl App {
             should_quit: false,
             mode: AppMode::Normal,
             search_state: SearchState::default(),
+            status_message: None,
             file_watcher,
             file_change_rx,
         })
@@ -141,10 +149,12 @@ impl App {
             }
 
             // Check for file changes if watching
-            if let Some(ref rx) = self.file_change_rx
-                && rx.try_recv().is_ok()
-            {
-                self.reload_file()?;
+            if let Some(ref rx) = self.file_change_rx {
+                match rx.try_recv() {
+                    Ok(None) => self.reload_file()?,
+                    Ok(Some(err)) => self.status_message = Some(format!("Watch error: {err}")),
+                    Err(_) => {}
+                }
             }
 
             // Handle input events
@@ -162,6 +172,7 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key_code: KeyCode) {
+        self.status_message = None;
         match self.mode {
             AppMode::Normal => self.handle_normal_mode_key(key_code),
             AppMode::Search => self.handle_search_mode_key(key_code),
@@ -189,7 +200,7 @@ impl App {
             // Reload file
             KeyCode::Char('r') => {
                 if let Err(e) = self.reload_file() {
-                    eprintln!("Failed to reload file: {}", e);
+                    self.status_message = Some(format!("Reload error: {e}"));
                 }
             }
             // Vim-style movement: up
@@ -472,6 +483,10 @@ impl App {
 
     pub fn get_search_state(&self) -> &SearchState {
         &self.search_state
+    }
+
+    pub fn get_status_message(&self) -> Option<&str> {
+        self.status_message.as_deref()
     }
 }
 

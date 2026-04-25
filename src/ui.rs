@@ -125,28 +125,32 @@ fn draw_search_bar(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let search_state = app.get_search_state();
-
-    let help_text = if search_state.is_active && !search_state.results.is_empty() {
-        if app.is_watching() {
-            "Press 'q' to quit | '/' to search | 'n'/'N' for next/prev | Watching for file changes..."
-        } else {
-            "Press 'q' to quit | '/' to search | 'n'/'N' for next/prev | 'r' to reload"
-        }
-    } else if app.is_watching() {
-        "Press 'q' to quit | ↑/↓ or j/k to scroll | '/' to search | Watching for file changes..."
+    let (text, color, title) = if let Some(msg) = app.get_status_message() {
+        (msg.to_string(), Color::Red, "Error")
     } else {
-        "Press 'q' to quit | ↑/↓ or j/k to scroll | '/' to search | 'r' to reload"
+        let search_state = app.get_search_state();
+        let help_text = if search_state.is_active && !search_state.results.is_empty() {
+            if app.is_watching() {
+                "Press 'q' to quit | '/' to search | 'n'/'N' for next/prev | Watching for file changes..."
+            } else {
+                "Press 'q' to quit | '/' to search | 'n'/'N' for next/prev | 'r' to reload"
+            }
+        } else if app.is_watching() {
+            "Press 'q' to quit | ↑/↓ or j/k to scroll | '/' to search | Watching for file changes..."
+        } else {
+            "Press 'q' to quit | ↑/↓ or j/k to scroll | '/' to search | 'r' to reload"
+        };
+        (help_text.to_string(), Color::Gray, "Help")
     };
 
     let footer = Paragraph::new(Line::from(vec![Span::styled(
-        help_text,
-        Style::default().fg(Color::Gray),
+        text,
+        Style::default().fg(color),
     )]))
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Help")
+            .title(title)
             .title_style(Style::default().fg(Color::Green)),
     );
 
