@@ -39,14 +39,6 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    if !cli.file.exists() {
-        anyhow::bail!("File does not exist: {}", cli.file.display());
-    }
-
-    if !cli.file.is_file() {
-        anyhow::bail!("Path is not a file: {}", cli.file.display());
-    }
-
     let mut app = App::new(cli.file, cli.watch)?;
     app.run()?;
 
