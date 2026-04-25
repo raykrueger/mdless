@@ -69,6 +69,7 @@ pub struct SearchResult {
 
 pub struct App {
     file_path: PathBuf,
+    file_name: String,
     renderer: MarkdownRenderer,
     rendered_content: Text<'static>,
     scroll_offset: usize,
@@ -90,6 +91,11 @@ impl App {
         renderer.load_file(&file_path)?;
         let rendered_content = renderer.render_to_text();
         let content_length = rendered_content.lines.len();
+        let file_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Unknown")
+            .to_string();
 
         let (file_watcher, file_change_rx) = if watch {
             let (tx, rx) = mpsc::channel();
@@ -111,6 +117,7 @@ impl App {
 
         Ok(Self {
             file_path,
+            file_name,
             renderer,
             rendered_content,
             scroll_offset: 0,
@@ -239,15 +246,14 @@ impl App {
             }
             // Vim-style movement: move up 5 lines
             KeyCode::Char('K') => {
-                for _ in 0..5 {
-                    self.scroll_up();
-                }
+                self.scroll_offset = self.scroll_offset.saturating_sub(5);
             }
             // Vim-style movement: move down 5 lines
             KeyCode::Char('J') => {
-                for _ in 0..5 {
-                    self.scroll_down();
-                }
+                self.scroll_offset = self
+                    .scroll_offset
+                    .saturating_add(5)
+                    .min(self.content_length.saturating_sub(1));
             }
             // Vim-style movement: move to middle of screen
             KeyCode::Char('M') => {
@@ -255,15 +261,14 @@ impl App {
             }
             // Vim-style movement: move up 10 lines (alternative to page up)
             KeyCode::Char('U') => {
-                for _ in 0..10 {
-                    self.scroll_up();
-                }
+                self.scroll_offset = self.scroll_offset.saturating_sub(10);
             }
             // Vim-style movement: move down 10 lines (alternative to page down)
             KeyCode::Char('D') => {
-                for _ in 0..10 {
-                    self.scroll_down();
-                }
+                self.scroll_offset = self
+                    .scroll_offset
+                    .saturating_add(10)
+                    .min(self.content_length.saturating_sub(1));
             }
             _ => {}
         }
@@ -459,12 +464,8 @@ impl App {
         self.search_state = SearchState::default();
     }
 
-    pub fn get_file_name(&self) -> String {
-        self.file_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("Unknown")
-            .to_string()
+    pub fn get_file_name(&self) -> &str {
+        &self.file_name
     }
 
     pub fn get_rendered_content(&self) -> &Text<'static> {
