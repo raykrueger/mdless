@@ -2,6 +2,8 @@
 
 A fast, terminal-based markdown file viewer built with Rust.
 
+![screenshot](screenshot.png)
+
 ## Features
 
 - **Real-time rendering**: View markdown files with syntax highlighting

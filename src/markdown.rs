@@ -44,6 +44,11 @@ struct MarkdownLineBuilder<'a> {
     in_emphasis: bool,
     in_strong: bool,
     last_was_empty_line: bool,
+    // Image state
+    in_image: bool,
+    image_src: String,
+    image_title: String,
+    image_alt: String,
     // Table state
     in_table_head: bool,
     in_table_cell: bool,
@@ -68,6 +73,10 @@ impl<'a> MarkdownLineBuilder<'a> {
             in_emphasis: false,
             in_strong: false,
             last_was_empty_line: true,
+            in_image: false,
+            image_src: String::new(),
+            image_title: String::new(),
+            image_alt: String::new(),
             in_table_head: false,
             in_table_cell: false,
             table_alignments: Vec::new(),
@@ -145,6 +154,16 @@ impl<'a> MarkdownLineBuilder<'a> {
                 self.in_table_cell = true;
                 self.table_current_cell.clear();
             }
+            Tag::Image { dest_url, title, .. } => {
+                self.flush_current_line();
+                if !self.last_was_empty_line && !self.lines.is_empty() {
+                    self.lines.push(Line::from(""));
+                }
+                self.in_image = true;
+                self.image_src = dest_url.to_string();
+                self.image_title = title.to_string();
+                self.image_alt.clear();
+            }
             _ => {}
         }
     }
@@ -205,6 +224,9 @@ impl<'a> MarkdownLineBuilder<'a> {
                 self.lines.push(Line::from(""));
                 self.last_was_empty_line = true;
             }
+            TagEnd::Image => {
+                self.render_image();
+            }
             _ => {}
         }
     }
@@ -214,6 +236,8 @@ impl<'a> MarkdownLineBuilder<'a> {
             self.table_current_cell.push_str(text);
         } else if self.in_code_block {
             self.code_block_content.push_str(text);
+        } else if self.in_image {
+            self.image_alt.push_str(text);
         } else {
             let style = self.renderer.get_text_style(
                 self.in_heading,
@@ -295,6 +319,42 @@ impl<'a> MarkdownLineBuilder<'a> {
             "└─────────────────────────────────────────────────────────────────────────────┘",
             Style::default().fg(Color::DarkGray),
         )]));
+    }
+
+    /// Render an image placeholder with alt text and source path/URL.
+    fn render_image(&mut self) {
+        let alt = if self.image_alt.is_empty() {
+            "image".to_string()
+        } else {
+            self.image_alt.clone()
+        };
+
+        let src = self.image_src.clone();
+        let title = self.image_title.clone();
+
+        let placeholder = if title.is_empty() {
+            format!("[{alt}] ({src})")
+        } else {
+            format!("[{alt}] ({src}) \"{title}\"")
+        };
+
+        self.lines.push(Line::from(vec![
+            Span::styled(
+                "🖼 ".to_string(),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                placeholder,
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+
+        self.image_src.clear();
+        self.image_title.clear();
+        self.image_alt.clear();
+        self.in_image = false;
     }
 
     /// Finalize: flush any remaining content and return the rendered Text.
@@ -901,5 +961,45 @@ mod tests {
                 "code line must be exactly 79 chars wide, got {width}"
             );
         }
+    }
+
+    #[test]
+    fn test_image_renders_placeholder() {
+        let mut renderer = MarkdownRenderer::new();
+        renderer.content = "![alt text](image.png)".to_string();
+
+        let text = renderer.render_to_text();
+        let lines_text: Vec<String> = text
+            .lines
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+
+        assert!(
+            lines_text.iter().any(|l| l.contains("alt text")),
+            "should contain alt text"
+        );
+        assert!(
+            lines_text.iter().any(|l| l.contains("image.png")),
+            "should contain image source"
+        );
+    }
+
+    #[test]
+    fn test_image_no_alt_defaults_to_image() {
+        let mut renderer = MarkdownRenderer::new();
+        renderer.content = "![](image.png)".to_string();
+
+        let text = renderer.render_to_text();
+        let lines_text: Vec<String> = text
+            .lines
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+
+        assert!(
+            lines_text.iter().any(|l| l.contains("[image]")),
+            "should default to 'image' when no alt text"
+        );
     }
 }
