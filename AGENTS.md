@@ -25,7 +25,7 @@ cargo audit                                          # security audit
 
 - `ratatui` + `crossterm` — TUI framework and terminal backend
 - `pulldown-cmark` — markdown parsing
-- `syntect` — syntax highlighting inside code blocks (theme: `base16-ocean.dark`)
+- `syntect` — syntax highlighting inside code blocks (auto-selects Solarized dark/light via `$COLORFGBG`)
 - `notify` — file system watching for `-w` (watch) mode
 - `clap` — CLI argument parsing
 - `anyhow` / `thiserror` — error handling (`thiserror` for typed errors in the library, `anyhow` available for application-level use)
@@ -77,3 +77,16 @@ Rules:
 - Rebase feature branches onto main before merging
 - Squash commits when merging to main
 - Never commit secrets, API keys, or credentials
+
+## Release Process
+
+Two scripts handle releases (both require being on `main` with a clean working tree):
+
+```bash
+./scripts/bump-version.sh [patch|minor|major]   # bump version, commit, tag, push → GitHub release
+./scripts/publish-crate.sh [--dry-run]           # publish to crates.io
+```
+
+**`bump-version.sh`**: Bumps `Cargo.toml` version, commits the change, creates a `v<version>` tag, and pushes to `origin`. This triggers the GitHub Actions workflow that builds binaries for Linux x86_64, Windows x86_64, macOS x86_64, and macOS aarch64, then creates a GitHub release.
+
+**`publish-crate.sh`**: Runs tests, clippy, and formatting checks, verifies the package builds, then publishes to crates.io. Use `--dry-run` to validate without publishing.
