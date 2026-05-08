@@ -29,16 +29,19 @@ sudo mv mdless-linux-x86_64 /usr/local/bin/mdless
 ```
 
 **macOS:**
+
+```bash
+# For Apple Silicon Macs:
+wget https://github.com/raykrueger/mdless/releases/latest/download/mdless-macos-aarch64
+chmod +x mdless-macos-aarch64
+sudo mv mdless-macos-aarch64 /usr/local/bin/mdless
+```
+
 ```bash
 # For Intel Macs:
 wget https://github.com/raykrueger/mdless/releases/latest/download/mdless-macos-x86_64
 chmod +x mdless-macos-x86_64
 sudo mv mdless-macos-x86_64 /usr/local/bin/mdless
-
-# For Apple Silicon Macs:
-wget https://github.com/raykrueger/mdless/releases/latest/download/mdless-macos-aarch64
-chmod +x mdless-macos-aarch64
-sudo mv mdless-macos-aarch64 /usr/local/bin/mdless
 ```
 
 **Windows:**
