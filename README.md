@@ -155,6 +155,10 @@ To bypass the hook for a specific commit (not recommended):
 git commit --no-verify
 ```
 
+## AI-Generated Codebase
+
+This entire codebase was generated using AI. Various models and agents have been used at different times during development. I use mdless on a daily basis and review code on a regular basis.
+
 ## License
 
 Licensed under the Apache License, Version 2.0 (the "License");
