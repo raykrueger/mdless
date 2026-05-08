@@ -34,6 +34,7 @@ pub struct MarkdownRenderer {
 /// Holds a reference to `MarkdownRenderer` to access syntax-highlighting helpers.
 struct MarkdownLineBuilder<'a> {
     renderer: &'a MarkdownRenderer,
+    width: usize,
     lines: Vec<Line<'static>>,
     current_line: Vec<Span<'static>>,
     in_code_block: bool,
@@ -60,9 +61,10 @@ struct MarkdownLineBuilder<'a> {
 }
 
 impl<'a> MarkdownLineBuilder<'a> {
-    fn new(renderer: &'a MarkdownRenderer) -> Self {
+    fn new(renderer: &'a MarkdownRenderer, width: usize) -> Self {
         Self {
             renderer,
+            width,
             lines: Vec::new(),
             current_line: Vec::new(),
             in_code_block: false,
@@ -279,20 +281,23 @@ impl<'a> MarkdownLineBuilder<'a> {
 
     /// Render the collected code block with borders and syntax highlighting.
     fn render_code_block(&mut self) {
-        let highlighted_lines = self
-            .renderer
-            .highlight_code_block(&self.code_block_content, &self.code_block_language);
+        let highlighted_lines = self.renderer.highlight_code_block(
+            &self.code_block_content,
+            &self.code_block_language,
+            self.width,
+        );
 
-        // Top border
-        self.lines.push(Line::from(vec![Span::styled(
-            "┌─────────────────────────────────────────────────────────────────────────────┐",
-            Style::default().fg(Color::DarkGray),
-        )]));
+        let border_style = Style::default().fg(Color::DarkGray);
+        let fill_count = self.width.saturating_sub(2);
+        let h_border = format!("┌{}┐", "─".repeat(fill_count));
+        let h_sep = format!("├{}┤", "─".repeat(fill_count));
+        let bot_border = format!("└{}┘", "─".repeat(fill_count));
 
-        // Language label if present
+        self.lines.push(Line::from(vec![Span::styled(h_border, border_style)]));
+
         if !self.code_block_language.is_empty() {
             let language_display_width = self.code_block_language.chars().count();
-            let padding_needed = 79_usize.saturating_sub(2 + language_display_width + 1);
+            let padding_needed = self.width.saturating_sub(language_display_width + 3);
 
             self.lines.push(Line::from(vec![
                 Span::styled("│ ", Style::default().fg(Color::DarkGray)),
@@ -305,20 +310,11 @@ impl<'a> MarkdownLineBuilder<'a> {
                 Span::styled(" ".repeat(padding_needed), Style::default()),
                 Span::styled("│", Style::default().fg(Color::DarkGray)),
             ]));
-            self.lines.push(Line::from(vec![Span::styled(
-                "├─────────────────────────────────────────────────────────────────────────────┤",
-                Style::default().fg(Color::DarkGray),
-            )]));
+            self.lines.push(Line::from(vec![Span::styled(h_sep, border_style)]));
         }
 
-        // Highlighted code lines
         self.lines.extend(highlighted_lines);
-
-        // Bottom border
-        self.lines.push(Line::from(vec![Span::styled(
-            "└─────────────────────────────────────────────────────────────────────────────┘",
-            Style::default().fg(Color::DarkGray),
-        )]));
+        self.lines.push(Line::from(vec![Span::styled(bot_border, border_style)]));
     }
 
     /// Render an image placeholder with alt text and source path/URL.
@@ -384,22 +380,26 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    pub fn render_to_text(&self) -> Text<'static> {
+    pub fn render_to_text(&self, width: usize) -> Text<'static> {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_TABLES);
         let parser = Parser::new_ext(&self.content, options);
 
-        let mut builder = MarkdownLineBuilder::new(self);
+        let mut builder = MarkdownLineBuilder::new(self, width);
         for event in parser {
             builder.handle_event(event);
         }
         builder.finish()
     }
 
-    fn highlight_code_block(&self, code: &str, language: &str) -> Vec<Line<'static>> {
+    fn highlight_code_block(
+        &self,
+        code: &str,
+        language: &str,
+        box_width: usize,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
 
-        // Try to find the syntax for the given language
         let syntax = if language.is_empty() {
             self.syntax_set.find_syntax_plain_text()
         } else {
@@ -409,13 +409,10 @@ impl MarkdownRenderer {
                 .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text())
         };
 
-        // Use a dark theme for better terminal compatibility
         let theme = &self.theme_set.themes["base16-ocean.dark"];
         let mut highlighter = HighlightLines::new(syntax, theme);
 
-        // "│ " prefix (2) + content + padding + "│" suffix (1) = BOX_WIDTH
-        const BOX_WIDTH: usize = 79;
-        const INNER_WIDTH: usize = BOX_WIDTH - 3; // 76
+        let inner_width = box_width.saturating_sub(3);
 
         for line in LinesWithEndings::from(code) {
             let highlighted = highlighter
@@ -439,8 +436,8 @@ impl MarkdownRenderer {
                 .sum();
 
             // Truncate lines that exceed the box inner width
-            if content_length > INNER_WIDTH {
-                let max_chars = INNER_WIDTH - 1; // reserve 1 for …
+            if content_length > inner_width {
+                let max_chars = inner_width.saturating_sub(1);
                 let mut new_spans = vec![spans[0].clone()];
                 let mut chars_left = max_chars;
                 for span in spans.iter().skip(1) {
@@ -466,17 +463,17 @@ impl MarkdownRenderer {
                 .skip(1)
                 .map(|s| s.content.chars().count())
                 .sum();
-            let padding_needed = BOX_WIDTH.saturating_sub(2 + content_length + 1);
+            let padding_needed = box_width.saturating_sub(2 + content_length + 1);
             spans.push(Span::styled(" ".repeat(padding_needed), Style::default()));
             spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
             lines.push(Line::from(spans));
         }
 
-        // If no lines were added (empty code block), add an empty line
         if lines.is_empty() {
+            let fill = box_width.saturating_sub(3);
             lines.push(Line::from(vec![
                 Span::styled("│", Style::default().fg(Color::DarkGray)),
-                Span::styled(" ".repeat(76), Style::default()), // 79 - 2 - 1 = 76 spaces
+                Span::styled(" ".repeat(fill), Style::default()),
                 Span::styled("│", Style::default().fg(Color::DarkGray)),
             ]));
         }
@@ -685,7 +682,7 @@ mod tests {
         let mut renderer = MarkdownRenderer::new();
         renderer.content = "Hello, world!".to_string();
 
-        let text = renderer.render_to_text();
+        let text = renderer.render_to_text(80);
         assert!(!text.lines.is_empty());
     }
 
@@ -694,7 +691,7 @@ mod tests {
         let mut renderer = MarkdownRenderer::new();
         renderer.content = "# Main Title\n\nSome content".to_string();
 
-        let text = renderer.render_to_text();
+        let text = renderer.render_to_text(80);
         assert!(text.lines.len() >= 2);
     }
 
@@ -704,7 +701,7 @@ mod tests {
         renderer.content =
             "Some paragraph text.\n### Header without spacing\nMore content.".to_string();
 
-        let text = renderer.render_to_text();
+        let text = renderer.render_to_text(80);
 
         // The rendered text should have proper spacing before the header
         // We expect: paragraph line, empty line, header line, empty line, content line
@@ -747,7 +744,7 @@ mod tests {
         renderer.content =
             "Paragraph.\n### First Header\nContent.\n### Second Header\nMore content.".to_string();
 
-        let text = renderer.render_to_text();
+        let text = renderer.render_to_text(80);
 
         // Should have proper spacing before both headers
         let lines_text: Vec<String> = text
@@ -798,7 +795,7 @@ mod tests {
         let mut renderer = MarkdownRenderer::new();
         renderer.content = "```rust\nfn main() {}\n```".to_string();
 
-        let text = renderer.render_to_text();
+        let text = renderer.render_to_text(80);
 
         // Find the language header line (contains "rust")
         let language_line_idx = text
@@ -816,10 +813,10 @@ mod tests {
             .map(|s| s.content.chars().count())
             .sum();
 
-        // The language header line should have exactly 79 display characters to match the border
+        // The language header line should match the border width
         assert_eq!(
-            display_width, 79,
-            "Language line should be exactly 79 display characters wide"
+            display_width, 80,
+            "Language line should be exactly 80 display characters wide"
         );
 
         // Check that it has the proper structure
@@ -845,7 +842,7 @@ mod tests {
         renderer.content =
             "```rust\nfn main() {\n    println!(\"Hello, world!\");\n}\n```".to_string();
 
-        let text = renderer.render_to_text();
+        let text = renderer.render_to_text(80);
 
         // Find all lines that contain code content (between borders)
         let code_content_lines: Vec<&Line> = text
@@ -862,13 +859,13 @@ mod tests {
             })
             .collect();
 
-        // Each code content line should have exactly 79 display characters
+        // Each code content line should match the box width
         for line in code_content_lines {
             let display_width: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
 
             assert_eq!(
-                display_width, 79,
-                "Code content line should be exactly 79 display characters wide"
+                display_width, 80,
+                "Code content line should be exactly 80 display characters wide"
             );
         }
     }
@@ -879,7 +876,7 @@ mod tests {
         renderer.content =
             "| Key | Action |\n| --- | --- |\n| `q` | Quit |\n| `j` | Down |".to_string();
 
-        let text = renderer.render_to_text();
+        let text = renderer.render_to_text(80);
         let lines_text: Vec<String> = text
             .lines
             .iter()
@@ -915,7 +912,7 @@ mod tests {
         // Second column has a longer body cell than header
         renderer.content = "| A | B |\n| --- | --- |\n| x | very long cell |".to_string();
 
-        let text = renderer.render_to_text();
+        let text = renderer.render_to_text(80);
         let lines_text: Vec<String> = text
             .lines
             .iter()
@@ -947,9 +944,9 @@ mod tests {
             "```bash\nwget https://github.com/raykrueger/mdless/releases/latest/download/mdless-macos-aarch64\n```"
                 .to_string();
 
-        let text = renderer.render_to_text();
+        let text = renderer.render_to_text(80);
 
-        // Every content line must be exactly 79 display chars wide
+        // Every content line must match the box width
         for line in text
             .lines
             .iter()
@@ -957,8 +954,8 @@ mod tests {
         {
             let width: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
             assert_eq!(
-                width, 79,
-                "code line must be exactly 79 chars wide, got {width}"
+                width, 80,
+                "code line must be exactly 80 chars wide, got {width}"
             );
         }
     }
@@ -968,7 +965,7 @@ mod tests {
         let mut renderer = MarkdownRenderer::new();
         renderer.content = "![alt text](image.png)".to_string();
 
-        let text = renderer.render_to_text();
+        let text = renderer.render_to_text(80);
         let lines_text: Vec<String> = text
             .lines
             .iter()
@@ -990,7 +987,7 @@ mod tests {
         let mut renderer = MarkdownRenderer::new();
         renderer.content = "![](image.png)".to_string();
 
-        let text = renderer.render_to_text();
+        let text = renderer.render_to_text(80);
         let lines_text: Vec<String> = text
             .lines
             .iter()

@@ -77,6 +77,7 @@ pub struct App {
     scroll_offset: usize,
     content_length: usize,
     viewport_height: usize,
+    viewport_width: usize,
     watching: bool,
     should_quit: bool,
     mode: AppMode,
@@ -91,7 +92,7 @@ impl App {
     pub fn new(file_path: PathBuf, watch: bool) -> Result<Self> {
         let mut renderer = MarkdownRenderer::new();
         renderer.load_file(&file_path)?;
-        let rendered_content = renderer.render_to_text();
+        let rendered_content = renderer.render_to_text(80);
         let content_length = rendered_content.lines.len();
         let file_name = file_path
             .file_name()
@@ -126,6 +127,7 @@ impl App {
             scroll_offset: 0,
             content_length,
             viewport_height: 24,
+            viewport_width: 0,
             watching: watch,
             should_quit: false,
             mode: AppMode::Normal,
@@ -347,7 +349,8 @@ impl App {
 
     fn reload_file(&mut self) -> Result<()> {
         self.renderer.load_file(&self.file_path)?;
-        self.rendered_content = self.renderer.render_to_text();
+        let width = self.viewport_width.max(40);
+        self.rendered_content = self.renderer.render_to_text(width);
         self.content_length = self.rendered_content.lines.len();
 
         // Adjust scroll offset if content is shorter
@@ -529,6 +532,15 @@ impl App {
 
     pub fn set_viewport_height(&mut self, height: u16) {
         self.viewport_height = height.saturating_sub(2) as usize;
+    }
+
+    pub fn set_viewport_width(&mut self, width: u16) {
+        let width = width as usize;
+        if width != self.viewport_width {
+            self.viewport_width = width;
+            self.rendered_content = self.renderer.render_to_text(width);
+            self.content_length = self.rendered_content.lines.len();
+        }
     }
 
     fn exit_search_mode(&mut self) {
