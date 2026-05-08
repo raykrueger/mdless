@@ -18,16 +18,17 @@ use ratatui::text::{Line, Span, Text};
 use std::fs;
 use std::path::Path;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{Style as SyntectStyle, ThemeSet};
+use syntect::highlighting::Style as SyntectStyle;
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
 use crate::error::Result;
+use crate::theme::ThemeColors;
 
 pub struct MarkdownRenderer {
     content: String,
     syntax_set: SyntaxSet,
-    theme_set: ThemeSet,
+    theme_colors: ThemeColors,
 }
 
 /// Stateful builder that consumes pulldown-cmark events and produces ratatui `Text`.
@@ -135,7 +136,7 @@ impl<'a> MarkdownLineBuilder<'a> {
                 self.current_line.push(Span::styled(
                     "• ",
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(self.renderer.theme_colors.list_bullet)
                         .add_modifier(Modifier::BOLD),
                 ));
             }
@@ -260,8 +261,8 @@ impl<'a> MarkdownLineBuilder<'a> {
 
     fn handle_code(&mut self, code: &str) {
         let style = Style::default()
-            .fg(Color::Yellow)
-            .bg(Color::Rgb(40, 40, 40))
+            .fg(self.renderer.theme_colors.inline_code_fg)
+            .bg(self.renderer.theme_colors.inline_code_bg)
             .add_modifier(Modifier::BOLD);
         self.current_line
             .push(Span::styled(format!(" {} ", code), style));
@@ -289,7 +290,8 @@ impl<'a> MarkdownLineBuilder<'a> {
             self.width,
         );
 
-        let border_style = Style::default().fg(Color::DarkGray);
+        let border_color = self.renderer.theme_colors.border;
+        let border_style = Style::default().fg(border_color);
         let fill_count = self.width.saturating_sub(2);
         let h_border = format!("┌{}┐", "─".repeat(fill_count));
         let h_sep = format!("├{}┤", "─".repeat(fill_count));
@@ -303,15 +305,15 @@ impl<'a> MarkdownLineBuilder<'a> {
             let padding_needed = self.width.saturating_sub(language_display_width + 3);
 
             self.lines.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+                Span::styled("│ ", Style::default().fg(border_color)),
                 Span::styled(
                     self.code_block_language.clone(),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(self.renderer.theme_colors.heading_h3)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(" ".repeat(padding_needed), Style::default()),
-                Span::styled("│", Style::default().fg(Color::DarkGray)),
+                Span::styled("│", Style::default().fg(border_color)),
             ]));
             self.lines
                 .push(Line::from(vec![Span::styled(h_sep, border_style)]));
@@ -339,12 +341,13 @@ impl<'a> MarkdownLineBuilder<'a> {
             format!("[{alt}] ({src}) \"{title}\"")
         };
 
+        let img_color = self.renderer.theme_colors.image_placeholder;
         self.lines.push(Line::from(vec![
-            Span::styled("🖼 ".to_string(), Style::default().fg(Color::DarkGray)),
+            Span::styled("🖼 ".to_string(), Style::default().fg(img_color)),
             Span::styled(
                 placeholder,
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(img_color)
                     .add_modifier(Modifier::ITALIC),
             ),
         ]));
@@ -369,12 +372,17 @@ impl<'a> MarkdownLineBuilder<'a> {
 }
 
 impl MarkdownRenderer {
-    pub fn new() -> Self {
+    pub fn new(theme_colors: ThemeColors) -> Self {
         Self {
             content: String::new(),
             syntax_set: SyntaxSet::load_defaults_newlines(),
-            theme_set: ThemeSet::load_defaults(),
+            theme_colors,
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn set_theme_colors(&mut self, colors: ThemeColors) {
+        self.theme_colors = colors;
     }
 
     pub fn load_file<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
@@ -411,7 +419,7 @@ impl MarkdownRenderer {
                 .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text())
         };
 
-        let theme = &self.theme_set.themes["base16-ocean.dark"];
+        let theme = &self.theme_colors.syntect_theme;
         let mut highlighter = HighlightLines::new(syntax, theme);
 
         let inner_width = box_width.saturating_sub(3);
@@ -421,7 +429,10 @@ impl MarkdownRenderer {
                 .highlight_line(line, &self.syntax_set)
                 .unwrap_or_else(|_| vec![(SyntectStyle::default(), line)]);
 
-            let mut spans = vec![Span::styled("│ ", Style::default().fg(Color::DarkGray))];
+            let mut spans = vec![Span::styled(
+                "│ ",
+                Style::default().fg(self.theme_colors.border),
+            )];
 
             for (style, text) in highlighted {
                 let ratatui_style = self.syntect_style_to_ratatui(style);
@@ -456,7 +467,10 @@ impl MarkdownRenderer {
                         chars_left = 0;
                     }
                 }
-                new_spans.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
+                new_spans.push(Span::styled(
+                    "…",
+                    Style::default().fg(self.theme_colors.border),
+                ));
                 spans = new_spans;
             }
 
@@ -467,16 +481,20 @@ impl MarkdownRenderer {
                 .sum();
             let padding_needed = box_width.saturating_sub(2 + content_length + 1);
             spans.push(Span::styled(" ".repeat(padding_needed), Style::default()));
-            spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                "│",
+                Style::default().fg(self.theme_colors.border),
+            ));
             lines.push(Line::from(spans));
         }
 
         if lines.is_empty() {
             let fill = box_width.saturating_sub(3);
+            let border_c = self.theme_colors.border;
             lines.push(Line::from(vec![
-                Span::styled("│", Style::default().fg(Color::DarkGray)),
+                Span::styled("│", Style::default().fg(border_c)),
                 Span::styled(" ".repeat(fill), Style::default()),
-                Span::styled("│", Style::default().fg(Color::DarkGray)),
+                Span::styled("│", Style::default().fg(border_c)),
             ]));
         }
 
@@ -507,9 +525,9 @@ impl MarkdownRenderer {
             })
             .collect();
 
-        let border_style = Style::default().fg(Color::DarkGray);
+        let border_style = Style::default().fg(self.theme_colors.border);
         let header_style = Style::default()
-            .fg(Color::Cyan)
+            .fg(self.theme_colors.table_header)
             .add_modifier(Modifier::BOLD);
 
         let top_border = Self::table_border_line(&col_widths, '┌', '┬', '┐', '─', border_style);
@@ -643,14 +661,9 @@ impl MarkdownRenderer {
         let mut style = Style::default();
 
         if in_heading {
-            style = match heading_level {
-                1 => style.fg(Color::Red).add_modifier(Modifier::BOLD),
-                2 => style.fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                3 => style.fg(Color::Green).add_modifier(Modifier::BOLD),
-                4 => style.fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                5 => style.fg(Color::Blue).add_modifier(Modifier::BOLD),
-                _ => style.fg(Color::Magenta).add_modifier(Modifier::BOLD),
-            };
+            style = style
+                .fg(self.theme_colors.heading_color(heading_level))
+                .add_modifier(Modifier::BOLD);
         }
 
         if in_code_block {
@@ -675,13 +688,15 @@ mod tests {
 
     #[test]
     fn test_new_renderer() {
-        let renderer = MarkdownRenderer::new();
+        let renderer =
+            MarkdownRenderer::new(ThemeColors::from_theme(crate::theme::Theme::default()));
         assert!(renderer.content.is_empty());
     }
 
     #[test]
     fn test_render_simple_text() {
-        let mut renderer = MarkdownRenderer::new();
+        let mut renderer =
+            MarkdownRenderer::new(ThemeColors::from_theme(crate::theme::Theme::default()));
         renderer.content = "Hello, world!".to_string();
 
         let text = renderer.render_to_text(80);
@@ -690,7 +705,8 @@ mod tests {
 
     #[test]
     fn test_render_heading() {
-        let mut renderer = MarkdownRenderer::new();
+        let mut renderer =
+            MarkdownRenderer::new(ThemeColors::from_theme(crate::theme::Theme::default()));
         renderer.content = "# Main Title\n\nSome content".to_string();
 
         let text = renderer.render_to_text(80);
@@ -699,7 +715,8 @@ mod tests {
 
     #[test]
     fn test_header_spacing_fix() {
-        let mut renderer = MarkdownRenderer::new();
+        let mut renderer =
+            MarkdownRenderer::new(ThemeColors::from_theme(crate::theme::Theme::default()));
         renderer.content =
             "Some paragraph text.\n### Header without spacing\nMore content.".to_string();
 
@@ -742,7 +759,8 @@ mod tests {
 
     #[test]
     fn test_multiple_headers_without_spacing() {
-        let mut renderer = MarkdownRenderer::new();
+        let mut renderer =
+            MarkdownRenderer::new(ThemeColors::from_theme(crate::theme::Theme::default()));
         renderer.content =
             "Paragraph.\n### First Header\nContent.\n### Second Header\nMore content.".to_string();
 
@@ -794,7 +812,8 @@ mod tests {
 
     #[test]
     fn test_code_block_border_alignment() {
-        let mut renderer = MarkdownRenderer::new();
+        let mut renderer =
+            MarkdownRenderer::new(ThemeColors::from_theme(crate::theme::Theme::default()));
         renderer.content = "```rust\nfn main() {}\n```".to_string();
 
         let text = renderer.render_to_text(80);
@@ -840,7 +859,8 @@ mod tests {
 
     #[test]
     fn test_code_block_content_line_alignment() {
-        let mut renderer = MarkdownRenderer::new();
+        let mut renderer =
+            MarkdownRenderer::new(ThemeColors::from_theme(crate::theme::Theme::default()));
         renderer.content =
             "```rust\nfn main() {\n    println!(\"Hello, world!\");\n}\n```".to_string();
 
@@ -874,7 +894,8 @@ mod tests {
 
     #[test]
     fn test_table_renders() {
-        let mut renderer = MarkdownRenderer::new();
+        let mut renderer =
+            MarkdownRenderer::new(ThemeColors::from_theme(crate::theme::Theme::default()));
         renderer.content =
             "| Key | Action |\n| --- | --- |\n| `q` | Quit |\n| `j` | Down |".to_string();
 
@@ -910,7 +931,8 @@ mod tests {
 
     #[test]
     fn test_table_column_widths() {
-        let mut renderer = MarkdownRenderer::new();
+        let mut renderer =
+            MarkdownRenderer::new(ThemeColors::from_theme(crate::theme::Theme::default()));
         // Second column has a longer body cell than header
         renderer.content = "| A | B |\n| --- | --- |\n| x | very long cell |".to_string();
 
@@ -940,7 +962,8 @@ mod tests {
 
     #[test]
     fn test_long_code_line_truncated() {
-        let mut renderer = MarkdownRenderer::new();
+        let mut renderer =
+            MarkdownRenderer::new(ThemeColors::from_theme(crate::theme::Theme::default()));
         // 88-char line — longer than inner box width of 76
         renderer.content =
             "```bash\nwget https://github.com/raykrueger/mdless/releases/latest/download/mdless-macos-aarch64\n```"
@@ -964,7 +987,8 @@ mod tests {
 
     #[test]
     fn test_image_renders_placeholder() {
-        let mut renderer = MarkdownRenderer::new();
+        let mut renderer =
+            MarkdownRenderer::new(ThemeColors::from_theme(crate::theme::Theme::default()));
         renderer.content = "![alt text](image.png)".to_string();
 
         let text = renderer.render_to_text(80);
@@ -986,7 +1010,8 @@ mod tests {
 
     #[test]
     fn test_image_no_alt_defaults_to_image() {
-        let mut renderer = MarkdownRenderer::new();
+        let mut renderer =
+            MarkdownRenderer::new(ThemeColors::from_theme(crate::theme::Theme::default()));
         renderer.content = "![](image.png)".to_string();
 
         let text = renderer.render_to_text(80);

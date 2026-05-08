@@ -19,9 +19,11 @@ use std::path::PathBuf;
 mod app;
 mod error;
 mod markdown;
+mod theme;
 mod ui;
 
 use app::App;
+use theme::{Theme, ThemeColors};
 
 #[derive(Parser)]
 #[command(name = "mdless")]
@@ -34,12 +36,18 @@ struct Cli {
     /// Enable file watching for live updates
     #[arg(short, long)]
     watch: bool,
+
+    /// Color theme for UI elements
+    #[arg(long, value_enum, default_value_t = Theme::default())]
+    theme: Theme,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let mut app = App::new(cli.file, cli.watch)?;
+    let theme_colors = ThemeColors::from_theme(cli.theme);
+
+    let mut app = App::new(cli.file, cli.watch, theme_colors)?;
     app.run()?;
 
     Ok(())
