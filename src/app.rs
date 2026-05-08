@@ -29,6 +29,7 @@ use std::{io, path::PathBuf, sync::mpsc, time::Duration};
 
 use crate::error::{MdViewError, Result};
 use crate::markdown::MarkdownRenderer;
+use crate::theme::ThemeColors;
 use crate::ui;
 
 struct TerminalGuard;
@@ -89,8 +90,8 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(file_path: PathBuf, watch: bool) -> Result<Self> {
-        let mut renderer = MarkdownRenderer::new();
+    pub fn new(file_path: PathBuf, watch: bool, theme_colors: ThemeColors) -> Result<Self> {
+        let mut renderer = MarkdownRenderer::new(theme_colors);
         renderer.load_file(&file_path)?;
         let rendered_content = renderer.render_to_text(80);
         let content_length = rendered_content.lines.len();
@@ -605,7 +606,12 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         fs::write(&temp_file, "# Test\n\nLine 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10\nLine 11\nLine 12\nLine 13\nLine 14\nLine 15\nLine 16\nLine 17\nLine 18\nLine 19\nLine 20").unwrap();
 
-        App::new(temp_file.path().to_path_buf(), false).unwrap()
+        App::new(
+            temp_file.path().to_path_buf(),
+            false,
+            ThemeColors::from_theme(crate::theme::Theme::default()),
+        )
+        .unwrap()
     }
 
     #[test]
