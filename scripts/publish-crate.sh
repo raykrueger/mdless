@@ -72,11 +72,12 @@ cargo package --list
 echo -e "${BLUE}🔨 Verifying package builds correctly...${NC}"
 cargo package
 
-# Show what would be published
-echo -e "${BLUE}📦 Package contents that will be published:${NC}"
-tar -tzf "target/package/mdless-$CURRENT_VERSION.crate" | head -20
-echo "..."
-echo "Total files: $(tar -tzf "target/package/mdless-$CURRENT_VERSION.crate" | wc -l)"
+# Verify the crate file was created
+if [[ ! -f "target/package/mdless-$CURRENT_VERSION.crate" ]]; then
+    echo -e "${RED}❌ Crate file not found. Package verification failed.${NC}"
+    exit 1
+fi
+echo -e "${BLUE}📦 Crate file: $(du -h "target/package/mdless-$CURRENT_VERSION.crate" | cut -f1)${NC}"
 
 # Final confirmation
 if [[ "$DRY_RUN" == "false" ]]; then
