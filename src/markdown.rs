@@ -156,7 +156,9 @@ impl<'a> MarkdownLineBuilder<'a> {
                 self.in_table_cell = true;
                 self.table_current_cell.clear();
             }
-            Tag::Image { dest_url, title, .. } => {
+            Tag::Image {
+                dest_url, title, ..
+            } => {
                 self.flush_current_line();
                 if !self.last_was_empty_line && !self.lines.is_empty() {
                     self.lines.push(Line::from(""));
@@ -293,7 +295,8 @@ impl<'a> MarkdownLineBuilder<'a> {
         let h_sep = format!("├{}┤", "─".repeat(fill_count));
         let bot_border = format!("└{}┘", "─".repeat(fill_count));
 
-        self.lines.push(Line::from(vec![Span::styled(h_border, border_style)]));
+        self.lines
+            .push(Line::from(vec![Span::styled(h_border, border_style)]));
 
         if !self.code_block_language.is_empty() {
             let language_display_width = self.code_block_language.chars().count();
@@ -310,11 +313,13 @@ impl<'a> MarkdownLineBuilder<'a> {
                 Span::styled(" ".repeat(padding_needed), Style::default()),
                 Span::styled("│", Style::default().fg(Color::DarkGray)),
             ]));
-            self.lines.push(Line::from(vec![Span::styled(h_sep, border_style)]));
+            self.lines
+                .push(Line::from(vec![Span::styled(h_sep, border_style)]));
         }
 
         self.lines.extend(highlighted_lines);
-        self.lines.push(Line::from(vec![Span::styled(bot_border, border_style)]));
+        self.lines
+            .push(Line::from(vec![Span::styled(bot_border, border_style)]));
     }
 
     /// Render an image placeholder with alt text and source path/URL.
@@ -335,10 +340,7 @@ impl<'a> MarkdownLineBuilder<'a> {
         };
 
         self.lines.push(Line::from(vec![
-            Span::styled(
-                "🖼 ".to_string(),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled("🖼 ".to_string(), Style::default().fg(Color::DarkGray)),
             Span::styled(
                 placeholder,
                 Style::default()
