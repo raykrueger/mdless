@@ -57,6 +57,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_content(frame: &mut Frame, area: Rect, app: &mut App) {
     app.set_viewport_height(area.height);
+    app.set_viewport_width(area.width.saturating_sub(2));
     let search_state = app.get_search_state();
     let content = if search_state.is_active && !search_state.results.is_empty() {
         app.get_highlighted_content().clone()
