@@ -14,7 +14,7 @@
 
 use crossterm::{
     cursor::Show,
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -37,12 +37,7 @@ struct TerminalGuard;
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(
-            io::stdout(),
-            LeaveAlternateScreen,
-            DisableMouseCapture,
-            Show
-        );
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
     }
 }
 
@@ -144,8 +139,7 @@ impl App {
         let _guard = TerminalGuard;
 
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
-            .map_err(|e| MdViewError::Terminal(e.to_string()))?;
+        execute!(stdout, EnterAlternateScreen).map_err(|e| MdViewError::Terminal(e.to_string()))?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal =
             Terminal::new(backend).map_err(|e| MdViewError::Terminal(e.to_string()))?;
